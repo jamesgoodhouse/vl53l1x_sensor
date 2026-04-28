@@ -189,6 +189,11 @@ void VL53L1XSensor::setup() {
         ESP_LOGD(TAG, "'%s' - Applied calibration offset: %d mm", this->name_.c_str(), this->calibration_offset_mm_);
     }
     if (this->has_calibration_xtalk_) {
+        if (!this->has_calibration_offset_) {
+            ESP_LOGW(TAG, "'%s' - Crosstalk calibration is applied without offset calibration; "
+                     "xtalk compensation may be inaccurate. Consider running offset calibration first.",
+                     this->name_.c_str());
+        }
         apply_xtalk(this->calibration_xtalk_cps_);
         ESP_LOGD(TAG, "'%s' - Applied calibration xtalk: %u cps", this->name_.c_str(), this->calibration_xtalk_cps_);
     }
