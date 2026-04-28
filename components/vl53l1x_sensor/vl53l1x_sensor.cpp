@@ -572,7 +572,10 @@ void VL53L1XSensor::apply_xtalk(uint16_t xtalk_cps) {
 }
 
 void VL53L1XSensor::calibrate_offset(uint16_t cal_distance_mm) {
-    ESP_LOGI(TAG, "'%s' - Starting offset calibration with target distance %u mm", this->name_.c_str(), cal_distance_mm);
+    uint32_t est_seconds = (uint32_t)50 * this->timing_budget_us_ / 1000000 + 5;
+    ESP_LOGI(TAG, "'%s' - Starting offset calibration with target distance %u mm (50 measurements, ~%u seconds). "
+             "Other components may be delayed.",
+             this->name_.c_str(), cal_distance_mm, est_seconds);
     stopRanging();
 
     apply_offset(0);
@@ -598,7 +601,10 @@ void VL53L1XSensor::calibrate_offset(uint16_t cal_distance_mm) {
 }
 
 void VL53L1XSensor::calibrate_xtalk(uint16_t cal_distance_mm) {
-    ESP_LOGI(TAG, "'%s' - Starting crosstalk calibration with target distance %u mm", this->name_.c_str(), cal_distance_mm);
+    uint32_t est_seconds = (uint32_t)50 * this->timing_budget_us_ / 1000000 + 5;
+    ESP_LOGI(TAG, "'%s' - Starting crosstalk calibration with target distance %u mm (50 measurements, ~%u seconds). "
+             "Other components may be delayed.",
+             this->name_.c_str(), cal_distance_mm, est_seconds);
     stopRanging();
 
     writeWord(0x0016, 0);  // Zero xtalk compensation before calibrating
