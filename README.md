@@ -113,6 +113,76 @@ Table of SPAD locations:
 |   0    | 120 | 112 | 104 |  96 |  88 |  80 |  72 |  64 |  56 |  48 |  40 |  32 |  24 |  16 |  8  |  0  |
 
 
+## Calibration
+
+The VL53L1X supports offset and crosstalk (xtalk) calibration to compensate for part-to-part variation and the presence of a cover glass. See [um2356](#um2356) Section 3 for full details.
+
+Calibration is a two-step process:
+
+1. **Run calibration** by triggering an action (e.g., from a Home Assistant button). The sensor takes 50 measurements and computes the calibration value, which is logged and applied for the current session.
+2. **Persist the result** by copying the logged value into your YAML config. On subsequent boots, the value is automatically written to the sensor registers during initialization.
+
+Calibration values are volatile on the sensor -- they reset on every power cycle. The YAML config is the source of truth.
+
+### Calibration configuration
+
+```yaml
+sensor:
+  - platform: vl53l1x_sensor
+    id: distance_sensor
+    name: Distance sensor
+    calibration:
+      # Offset in mm, compensates for distance offset from PCB soldering / cover glass.
+      # Obtain by running the calibrate_offset action with a 17% gray target at 140mm.
+      offset: 15
+      # Crosstalk in counts per second (cps), compensates for VCSEL light reflecting
+      # off a cover glass. Obtain by running the calibrate_xtalk action.
+      xtalk: 300
+```
+
+### Runtime calibration actions
+
+Per [um2356](#um2356) Section 3, offset calibration must be performed before crosstalk calibration. The combined `calibrate` action handles this automatically:
+
+```yaml
+button:
+  - platform: template
+    name: "Calibrate"
+    on_press:
+      # Place a 17% gray target at 140mm in dark conditions before pressing.
+      - vl53l1x_sensor.calibrate:
+          id: distance_sensor
+          offset_cal_distance: 140  # mm, target distance for offset calibration
+          xtalk_cal_distance: 600   # mm, max ranging distance with cover glass for xtalk
+```
+
+Individual actions are also available for advanced use cases:
+
+```yaml
+button:
+  - platform: template
+    name: "Calibrate Offset Only"
+    on_press:
+      - vl53l1x_sensor.calibrate_offset:
+          id: distance_sensor
+          value: 140  # target distance in mm
+  - platform: template
+    name: "Calibrate Xtalk Only"
+    on_press:
+      - vl53l1x_sensor.calibrate_xtalk:
+          id: distance_sensor
+          value: 600  # target distance in mm
+```
+
+After calibration completes, check the ESPHome logs for messages like:
+
+```
+Offset calibration complete: 15 mm -- add 'offset: 15' to your YAML calibration config
+Crosstalk calibration complete: 300 cps -- add 'xtalk: 300' to your YAML calibration config
+```
+
+Copy both values into the `calibration:` section of your YAML so they persist across reboots.
+
 ## Home Assistant
 
 Sensors reported to Home Assistant:

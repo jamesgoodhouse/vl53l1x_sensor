@@ -1,6 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome import pins
+from esphome import automation, pins
+from esphome.automation import maybe_simple_id
 from esphome.components import i2c, sensor
 from esphome.config_validation import Any
 from esphome.const import (
@@ -8,9 +9,11 @@ from esphome.const import (
     UNIT_METER,
     ICON_ARROW_EXPAND_VERTICAL,
     CONF_ADDRESS,
+    CONF_ID,
     CONF_TIMEOUT,
     CONF_ENABLE_PIN,
-    CONF_IRQ_PIN
+    CONF_IRQ_PIN,
+    CONF_VALUE,
 )
 
 DEPENDENCIES = ["i2c"]
@@ -31,8 +34,18 @@ CONF_AMBIENT_RATE_SENSOR = "ambient_rate_sensor"
 CONF_AVG_SIGNAL_RATE_SENSOR = "avg_signal_rate_sensor"
 CONF_PEAK_SIGNAL_RATE_SENSOR = "peak_signal_rate_sensor"
 CONF_RANGE_STATUS_SENSOR = "range_status_sensor"
+CONF_CALIBRATION = "calibration"
+CONF_CALIBRATION_OFFSET = "offset"
+CONF_CALIBRATION_XTALK = "xtalk"
 CONF_VALID_TIMING_BUDGET_DM_SHORT = [15, 20, 33, 50, 100, 200, 500]
 CONF_VALID_TIMING_BUDGET_DM_MEDIUM_AND_LONG = [20, 33, 50, 100, 200, 500]
+
+CalibrateOffsetAction = vl53l1x_ns.class_("CalibrateOffsetAction", automation.Action)
+CalibrateXtalkAction = vl53l1x_ns.class_("CalibrateXtalkAction", automation.Action)
+CalibrateAction = vl53l1x_ns.class_("CalibrateAction", automation.Action)
+
+CONF_OFFSET_CAL_DISTANCE = "offset_cal_distance"
+CONF_XTALK_CAL_DISTANCE = "xtalk_cal_distance"
 
 
 def check_keys(obj):
@@ -139,6 +152,10 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_ROI_CENTER, default=199): Any(cv.int_range(0, 255), CONFIG_ROI_CENTER),
             cv.Optional(CONF_ROI_SIZE, default={"x":16, "y": 16}): CONFIG_ROI_SIZE,
+            cv.Optional(CONF_CALIBRATION): cv.Schema({
+                cv.Optional(CONF_CALIBRATION_OFFSET): cv.int_range(-1024, 1024),
+                cv.Optional(CONF_CALIBRATION_XTALK): cv.int_range(0, 65535),
+            }),
         }
     )
     .extend(cv.polling_component_schema("60s"))
@@ -185,4 +202,71 @@ async def to_code(config):
         roi_size = config[CONF_ROI_SIZE]
         cg.add(var.set_roi_size(roi_size[CONF_X], roi_size[CONF_Y]))
 
+    if cal_config := config.get(CONF_CALIBRATION):
+        if CONF_CALIBRATION_OFFSET in cal_config:
+            cg.add(var.set_calibration_offset(cal_config[CONF_CALIBRATION_OFFSET]))
+        if CONF_CALIBRATION_XTALK in cal_config:
+            cg.add(var.set_calibration_xtalk(cal_config[CONF_CALIBRATION_XTALK]))
+
     await i2c.register_i2c_device(var, config)
+
+
+VL53L1X_CALIBRATE_SCHEMA = maybe_simple_id(
+    {
+        cv.GenerateID(): cv.use_id(VL53L1XSensor),
+        cv.Required(CONF_VALUE): cv.templatable(cv.positive_int),
+    }
+)
+
+
+@automation.register_action(
+    "vl53l1x_sensor.calibrate_offset",
+    CalibrateOffsetAction,
+    VL53L1X_CALIBRATE_SCHEMA,
+    synchronous=True,
+)
+async def vl53l1x_calibrate_offset_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    template_ = await cg.templatable(config[CONF_VALUE], args, cg.uint16)
+    cg.add(var.set_cal_distance(template_))
+    return var
+
+
+@automation.register_action(
+    "vl53l1x_sensor.calibrate_xtalk",
+    CalibrateXtalkAction,
+    VL53L1X_CALIBRATE_SCHEMA,
+    synchronous=True,
+)
+async def vl53l1x_calibrate_xtalk_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    template_ = await cg.templatable(config[CONF_VALUE], args, cg.uint16)
+    cg.add(var.set_cal_distance(template_))
+    return var
+
+
+VL53L1X_CALIBRATE_FULL_SCHEMA = maybe_simple_id(
+    {
+        cv.GenerateID(): cv.use_id(VL53L1XSensor),
+        cv.Required(CONF_OFFSET_CAL_DISTANCE): cv.templatable(cv.positive_int),
+        cv.Required(CONF_XTALK_CAL_DISTANCE): cv.templatable(cv.positive_int),
+    }
+)
+
+
+@automation.register_action(
+    "vl53l1x_sensor.calibrate",
+    CalibrateAction,
+    VL53L1X_CALIBRATE_FULL_SCHEMA,
+    synchronous=True,
+)
+async def vl53l1x_calibrate_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    template_ = await cg.templatable(config[CONF_OFFSET_CAL_DISTANCE], args, cg.uint16)
+    cg.add(var.set_offset_cal_distance(template_))
+    template_ = await cg.templatable(config[CONF_XTALK_CAL_DISTANCE], args, cg.uint16)
+    cg.add(var.set_xtalk_cal_distance(template_))
+    return var

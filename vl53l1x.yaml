@@ -46,6 +46,34 @@ sensor:
     roi_size:
       x: 4
       y: 4
+  - platform: vl53l1x_sensor
+    id: calibrated_sensor
+    name: Calibrated sensor
+    calibration:
+      offset: 15
+      xtalk: 300
+
+button:
+  - platform: template
+    name: "Calibrate"
+    on_press:
+      - vl53l1x_sensor.calibrate:
+          id: calibrated_sensor
+          offset_cal_distance: 140  # mm, 17% gray target distance for offset
+          xtalk_cal_distance: 600   # mm, max ranging distance with cover glass for xtalk
+  - platform: template
+    name: "Calibrate Offset Only"
+    on_press:
+      - vl53l1x_sensor.calibrate_offset:
+          id: calibrated_sensor
+          value: 140
+  - platform: template
+    name: "Calibrate Xtalk Only"
+    on_press:
+      - vl53l1x_sensor.calibrate_xtalk:
+          id: calibrated_sensor
+          value: 600
+
 i2c:
   sda: 4
   scl: 5

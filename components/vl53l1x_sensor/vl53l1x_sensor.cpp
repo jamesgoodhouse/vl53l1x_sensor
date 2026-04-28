@@ -184,6 +184,15 @@ void VL53L1XSensor::setup() {
     set_signal_threshold();
     set_roi();
 
+    if (this->has_calibration_offset_) {
+        apply_offset(this->calibration_offset_mm_);
+        ESP_LOGD(TAG, "'%s' - Applied calibration offset: %d mm", this->name_.c_str(), this->calibration_offset_mm_);
+    }
+    if (this->has_calibration_xtalk_) {
+        apply_xtalk(this->calibration_xtalk_cps_);
+        ESP_LOGD(TAG, "'%s' - Applied calibration xtalk: %u cps", this->name_.c_str(), this->calibration_xtalk_cps_);
+    }
+
     // Set the sensor to the desired final address
     reg16(0x0001) = final_address & 0x7F;
     this->set_i2c_address(final_address);
@@ -245,6 +254,12 @@ void VL53L1XSensor::dump_config() {
     ESP_LOGCONFIG(TAG, "  Signal threshold: %u KCPS", this->signal_threshold_);
     ESP_LOGCONFIG(TAG, "  ROI center: %u", this->roi_center_);
     ESP_LOGCONFIG(TAG, "  ROI size: x=%u, y=%u", this->roi_size_x_, this->roi_size_y_);
+    if (this->has_calibration_offset_) {
+        ESP_LOGCONFIG(TAG, "  Calibration offset: %d mm", this->calibration_offset_mm_);
+    }
+    if (this->has_calibration_xtalk_) {
+        ESP_LOGCONFIG(TAG, "  Calibration xtalk: %u cps", this->calibration_xtalk_cps_);
+    }
 }
 
 void VL53L1XSensor::startRanging() {
@@ -526,6 +541,95 @@ uint8_t VL53L1XSensor::calc_spad_index(uint8_t x, uint8_t y) {
   return
     (143 - y + x*8) * (1 - (uint8_t)((15 - y) / 8)) +
     (120 + y - x*8) * (uint8_t)((15 - y) / 8);
+}
+
+uint16_t VL53L1XSensor::signalRate() {
+    uint16_t signal = readWord(0x0098);  // PEAK_SIGNAL_COUNT_RATE_CROSSTALK_CORRECTED_MCPS_SD0
+    uint16_t spNb = readWord(0x008C);    // DSS_ACTUAL_EFFECTIVE_SPADS_SD0
+    return (uint16_t)(2000.0f * signal / spNb);
+}
+
+uint16_t VL53L1XSensor::spadCount() {
+    uint16_t tmp = readWord(0x008C);  // DSS_ACTUAL_EFFECTIVE_SPADS_SD0
+    return tmp >> 8;
+}
+
+void VL53L1XSensor::apply_offset(int16_t offset_mm) {
+    writeWord(0x001E, (uint16_t)(offset_mm * 4));  // ALGO__PART_TO_PART_RANGE_OFFSET_MM (14.2 format)
+    writeWord(0x0020, 0x0);  // MM_CONFIG__INNER_OFFSET_MM
+    writeWord(0x0022, 0x0);  // MM_CONFIG__OUTER_OFFSET_MM
+}
+
+void VL53L1XSensor::apply_xtalk(uint16_t xtalk_cps) {
+    writeWord(0x0018, 0x0000);  // ALGO__CROSSTALK_COMPENSATION_X_PLANE_GRADIENT_KCPS
+    writeWord(0x001A, 0x0000);  // ALGO__CROSSTALK_COMPENSATION_Y_PLANE_GRADIENT_KCPS
+    writeWord(0x0016, (xtalk_cps << 9) / 1000);  // ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS (7.9 format, cps to kcps)
+}
+
+void VL53L1XSensor::calibrate_offset(uint16_t cal_distance_mm) {
+    ESP_LOGI(TAG, "'%s' - Starting offset calibration with target distance %u mm", this->name_.c_str(), cal_distance_mm);
+    stopRanging();
+
+    apply_offset(0);
+
+    startRanging();
+    int32_t total_distance = 0;
+    for (uint8_t i = 0; i < 50; i++) {
+        while (!checkForDataReady()) {
+            yield();
+        }
+        total_distance += distance();
+        clearInterrupt();
+    }
+    stopRanging();
+
+    int16_t avg_distance = total_distance / 50;
+    int16_t offset = (int16_t)cal_distance_mm - avg_distance;
+    apply_offset(offset);
+
+    ESP_LOGI(TAG, "'%s' - Offset calibration complete: %d mm (avg measured: %d mm) -- add 'offset: %d' to your YAML calibration config",
+             this->name_.c_str(), offset, avg_distance, offset);
+    startRanging();
+}
+
+void VL53L1XSensor::calibrate_xtalk(uint16_t cal_distance_mm) {
+    ESP_LOGI(TAG, "'%s' - Starting crosstalk calibration with target distance %u mm", this->name_.c_str(), cal_distance_mm);
+    stopRanging();
+
+    writeWord(0x0016, 0);  // Zero xtalk compensation before calibrating
+
+    startRanging();
+    float total_signal_rate = 0;
+    float total_distance = 0;
+    float total_spad_nb = 0;
+    for (uint8_t i = 0; i < 50; i++) {
+        while (!checkForDataReady()) {
+            yield();
+        }
+        total_signal_rate += signalRate();
+        total_distance += distance();
+        total_spad_nb += spadCount();
+        clearInterrupt();
+    }
+    stopRanging();
+
+    float avg_signal_rate = total_signal_rate / 50.0f;
+    float avg_distance = total_distance / 50.0f;
+    float avg_spad_nb = total_spad_nb / 50.0f;
+
+    uint16_t xtalk = (uint16_t)(512.0f * (avg_signal_rate * (1.0f - (avg_distance / (float)cal_distance_mm))) / avg_spad_nb);
+    apply_xtalk(xtalk);
+
+    ESP_LOGI(TAG, "'%s' - Crosstalk calibration complete: %u cps (avg dist: %.0f mm, avg signal: %.0f, avg spads: %.0f) -- add 'xtalk: %u' to your YAML calibration config",
+             this->name_.c_str(), xtalk, avg_distance, avg_signal_rate, avg_spad_nb, xtalk);
+    startRanging();
+}
+
+void VL53L1XSensor::calibrate(uint16_t offset_cal_distance_mm, uint16_t xtalk_cal_distance_mm) {
+    ESP_LOGI(TAG, "'%s' - Starting full calibration (offset then crosstalk)", this->name_.c_str());
+    calibrate_offset(offset_cal_distance_mm);
+    calibrate_xtalk(xtalk_cal_distance_mm);
+    ESP_LOGI(TAG, "'%s' - Full calibration complete", this->name_.c_str());
 }
 
 } //namespace vl53l1x

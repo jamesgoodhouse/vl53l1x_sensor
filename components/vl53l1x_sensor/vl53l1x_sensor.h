@@ -2,6 +2,7 @@
 #include <list>
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
+#include "esphome/core/automation.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/i2c/i2c.h"
 
@@ -79,6 +80,13 @@ class VL53L1XSensor : public sensor::Sensor, public PollingComponent, public i2c
     void set_peak_signal_rate_sensor(sensor::Sensor *sensor) { this->peak_signal_rate_sensor = sensor; }
     void set_range_status_sensor(sensor::Sensor *sensor) { this->range_status_sensor = sensor; }
 
+    void set_calibration_offset(int16_t offset_mm) { this->calibration_offset_mm_ = offset_mm; this->has_calibration_offset_ = true; }
+    void set_calibration_xtalk(uint16_t xtalk_cps) { this->calibration_xtalk_cps_ = xtalk_cps; this->has_calibration_xtalk_ = true; }
+
+    void calibrate_offset(uint16_t cal_distance_mm);
+    void calibrate_xtalk(uint16_t cal_distance_mm);
+    void calibrate(uint16_t offset_cal_distance_mm, uint16_t xtalk_cal_distance_mm);
+
     private:
     void setI2CAddress(uint8_t addr);
     void startRanging();
@@ -99,10 +107,14 @@ class VL53L1XSensor : public sensor::Sensor, public PollingComponent, public i2c
     int16_t ambientRate();
     int16_t avgSignalRate();
     int16_t peakSignalRate();
+    uint16_t signalRate();
+    uint16_t spadCount();
     void set_distance_mode();
     void set_measurement_timing_budget();
     void set_signal_threshold();
     void set_roi();
+    void apply_offset(int16_t offset_mm);
+    void apply_xtalk(uint16_t xtalk_cps);
 
     sensor::Sensor *range_status_sensor{nullptr};
     sensor::Sensor *ambient_rate_sensor{nullptr};
@@ -122,6 +134,31 @@ class VL53L1XSensor : public sensor::Sensor, public PollingComponent, public i2c
     uint8_t roi_size_x_{};
     uint8_t roi_size_y_{};
     uint8_t rangeStatus{};
+    int16_t calibration_offset_mm_{0};
+    uint16_t calibration_xtalk_cps_{0};
+    bool has_calibration_offset_{false};
+    bool has_calibration_xtalk_{false};
+};
+
+template<typename... Ts> class CalibrateOffsetAction : public Action<Ts...>, public Parented<VL53L1XSensor> {
+ public:
+  TEMPLATABLE_VALUE(uint16_t, cal_distance)
+  void play(Ts... x) override { this->parent_->calibrate_offset(this->cal_distance_.value(x...)); }
+};
+
+template<typename... Ts> class CalibrateXtalkAction : public Action<Ts...>, public Parented<VL53L1XSensor> {
+ public:
+  TEMPLATABLE_VALUE(uint16_t, cal_distance)
+  void play(Ts... x) override { this->parent_->calibrate_xtalk(this->cal_distance_.value(x...)); }
+};
+
+template<typename... Ts> class CalibrateAction : public Action<Ts...>, public Parented<VL53L1XSensor> {
+ public:
+  TEMPLATABLE_VALUE(uint16_t, offset_cal_distance)
+  TEMPLATABLE_VALUE(uint16_t, xtalk_cal_distance)
+  void play(Ts... x) override {
+    this->parent_->calibrate(this->offset_cal_distance_.value(x...), this->xtalk_cal_distance_.value(x...));
+  }
 };
 
 } //namespace vl53l1x
